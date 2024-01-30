@@ -12,6 +12,17 @@ def prepare_output_folder(folder):
         os.mkdir(folder)
 
 
+def render():
+    return False
+
+
+def train(num_epochs, render_interval):
+    for i in range(1,num_epochs+1):
+        if i == 1 or i % render_interval == 0:
+            print("Epoch {0}".format(i))
+            render()
+
+
 def main():
 
     # Read the configuration
@@ -27,11 +38,11 @@ def main():
     # Filename parameters
     input_file = config.get('files', 'input_file')
     output_folder = config.get('files', 'output_folder')
-    num_epochs = config.get('training', 'num_epochs')
+    num_epochs = config.getint('training', 'num_epochs')
+    render_interval = config.getint('training', 'render_interval')
     prepare_output_folder(output_folder)
 
-
-
+    train(num_epochs, render_interval)
 
     print("Done!")
 
