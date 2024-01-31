@@ -44,8 +44,8 @@ def L1_and_SSIM(image_tensor_1, image_tensor_2, llambda):
     l1 = nn.L1Loss()
     L1 = l1(image_tensor_1, image_tensor_2)
 
-    image_tensor_1_reshaped = image_tensor_1.unsqueeze(0).permute(0, 3, 1, 2)
-    image_tensor_2_reshaped = image_tensor_2.unsqueeze(0).permute(0, 3, 1, 2)
+    image_tensor_1_reshaped = image_tensor_1.unsqueeze(0)
+    image_tensor_2_reshaped = image_tensor_2.unsqueeze(0)
     ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
     SSIM = ssim(image_tensor_1_reshaped, image_tensor_2_reshaped)
 
@@ -102,7 +102,6 @@ def render(means, variances, directions, colours, alphas, image_shape):
     nx, ny = (image_shape[0], image_shape[1])
     x = np.linspace(0, 1, nx)
     y = np.linspace(0, 1, ny)
-    xv, yv = np.meshgrid(x, y)
 
     combined_image = torch.zeros(3, nx, ny)
     sum_alphas = 0
@@ -152,33 +151,26 @@ def train(input_image, target_image, num_samples, num_epochs, learning_rate, ren
     Y = nn.Parameter(torch.cat([coords, variances, directions, colours, alphas], dim = 1))
     optimizer = Adam([Y], lr = learning_rate) 
     for i in range(1,num_epochs+1):
-    
-        means = torch.tanh(Y[:, 0:2])
-        variances = torch.sigmoid(Y[:, 2:4])
-        directions = torch.tanh(Y[:, 4])
-        colours = torch.sigmoid(Y[:, 5:8])
-        alphas = torch.sigmoid(Y[:, 8])
+        torch.empty
 
-        # --- TEST RENDERING -------------------------------------------------------
-        means =  torch.tensor([(0.3, 0.3), (0.5, 0.5)])
-        variances = torch.tensor([(0.5, 0.2), (0.6, 0.1)])
-        directions = torch.tensor([0, 3.14/4])
-        colours = torch.tensor([(1.0, 0.0, 0.0), (0.0, 0.0, 1.0)])
-        alphas = torch.tensor([1.0, 1.0])
-        # --- END TEST RENDERING ---------------------------------------------------
+        means = Y[:, 0:2]
+        variances = Y[:, 2:4]
+        directions = Y[:, 4]
+        colours = Y[:, 5:8]
+        alphas = Y[:, 8]
+
         output_image = render(means, variances, directions, colours, alphas, target_image.shape) # Keep this line
-        save_output_image(output_folder, tvt.ToPILImage()(output_image), 666)
-        exit()
 
-        output_image_tensor = torch.tensor(output_image, requires_grad=True)
-        target_image_tensor = torch.tensor(target_image, requires_grad=True)
+        output_image_tensor = torch.tensor(output_image, requires_grad=True).to(torch.float64)
+        target_image_tensor = torch.tensor(target_image, requires_grad=True).permute(2, 1, 0)
         loss = L1_and_SSIM(output_image_tensor, target_image_tensor, 0.2)
+        if i == 1 or i % render_interval == 0:
+            print("Epoch {0}, loss {1}".format(i, loss.item()))
+            save_output_image(output_folder, tvt.ToPILImage()(output_image), i)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        if i == 1 or i % render_interval == 0:
-            print("Epoch {0}, loss {1}".format(i, loss.item()))
-            #save_output_image(output_folder, tvt.ToPILImage()(output_image), i)
+
 
 
 def main():
