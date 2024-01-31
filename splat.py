@@ -44,21 +44,26 @@ def render(gaussians, image_shape):
 def L1_and_SSIM(image_tensor_1, image_tensor_2, llambda):
     l1 = nn.L1Loss()
     L1 = l1(image_tensor_1, image_tensor_2)
-    #ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
-    #SSIM = ssim(image_tensor_1, image_tensor_2)
-    #combined = (1.0-llambda) * L1 + llambda * SSIM
-    #return combined
-    return L1
+
+    image_tensor_1_reshaped = image_tensor_1.unsqueeze(0).permute(0, 3, 1, 2)
+    image_tensor_2_reshaped = image_tensor_2.unsqueeze(0).permute(0, 3, 1, 2)
+    ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
+    SSIM = ssim(image_tensor_1_reshaped, image_tensor_2_reshaped)
+
+    combined = (1.0-llambda) * L1 + llambda * (1 - SSIM)
+    return combined
 
 
 def save_output_image(output_folder, output_image, epoch):
     output_file_name = os.path.join(output_folder, "epoch_{0}.png".format(str(epoch.zfill(5))))
     output_image.save(output_file_name)
 
+
 def save_target_image(output_folder, target_image_array):
     output_file_name = os.path.join(output_folder, "target_image.png")
     target_image = Image.fromarray((target_image_array * 255).astype(np.uint8))
     target_image.save(output_file_name)
+
 
 def train(input_image, target_image, num_samples, num_epochs, learning_rate, render_interval, output_folder):
     
@@ -85,8 +90,8 @@ def train(input_image, target_image, num_samples, num_epochs, learning_rate, ren
     for i in range(1,num_epochs+1):
         #output_image = render(Y, target_image.shape)
         output_image_tensor = torch.tensor(target_image, requires_grad=True)
-        target_image_tensor = torch.tensor(target_image)
-        loss = L1_and_SSIM(output_image_tensor, output_image_tensor, 0.2)
+        target_image_tensor = torch.tensor(target_image, requires_grad=True)
+        loss = L1_and_SSIM(output_image_tensor, target_image_tensor, 0.2)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
