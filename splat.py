@@ -4,10 +4,11 @@ import configparser
 from PIL import Image
 import numpy as np
 import torch
-import torch.nn.functional as F
 import torch.nn as nn
 from torch.optim import Adam
 from torchmetrics.image import StructuralSimilarityIndexMeasure
+import torchvision.transforms as tvt
+import math
 
 
 def prepare_output_folder(folder):
@@ -18,8 +19,10 @@ def prepare_output_folder(folder):
     else:
         os.mkdir(folder)
 
+
 def prepare_target_image(input_image, target_image_width, target_image_height):
     return np.array(input_image.resize([target_image_width, target_image_height]).convert('RGB')) / 255.0
+
 
 def sample_input_image(input_image, num_samples):
     input_image = np.array(input_image.convert('RGB'))
@@ -37,10 +40,6 @@ def sample_input_image(input_image, num_samples):
     return colour_samples / 255.0 , sample_coords / max_dim
 
 
-def render(gaussians, image_shape):
-    return False
-
-
 def L1_and_SSIM(image_tensor_1, image_tensor_2, llambda):
     l1 = nn.L1Loss()
     L1 = l1(image_tensor_1, image_tensor_2)
@@ -55,7 +54,7 @@ def L1_and_SSIM(image_tensor_1, image_tensor_2, llambda):
 
 
 def save_output_image(output_folder, output_image, epoch):
-    output_file_name = os.path.join(output_folder, "epoch_{0}.png".format(str(epoch.zfill(5))))
+    output_file_name = os.path.join(output_folder, "epoch_{0}.png".format(str(epoch).zfill(5)))
     output_image.save(output_file_name)
 
 
@@ -63,6 +62,73 @@ def save_target_image(output_folder, target_image_array):
     output_file_name = os.path.join(output_folder, "target_image.png")
     target_image = Image.fromarray((target_image_array * 255).astype(np.uint8))
     target_image.save(output_file_name)
+
+def reconstruct_covariance(sx, sy, rho):
+    # https://en.wikipedia.org/wiki/Gaussian_function#Meaning_of_parameters_for_the_general_equation
+    
+    sx2 = sx * sx
+    sy2 = sy * sy
+    
+    cosrho = math.cos(rho)
+    sinrho = math.sin(rho)
+    sin2rho = math.sin(2 * rho)
+    cosrho_sq = cosrho * cosrho
+    sinrho_sq = sinrho * sinrho
+
+    a = cosrho_sq/(2*sx2) + sinrho_sq/(2*sy2)
+    b = sin2rho/(4*sx2)   + sin2rho/(4*sy2)
+    c = sinrho_sq/(2*sx2) + cosrho_sq/(2*sy2)
+
+    #covariance = np.array([a,b],[b,c])
+    covariance = (a, b, c)
+    return covariance
+
+def gaussian_2d(covariance, mx, my, x, y):
+    # https://en.wikipedia.org/wiki/Gaussian_function#Two-dimensional_Gaussian_function
+    a = covariance[0]
+    b = covariance[1]
+    c = covariance[2]
+    dx = x - mx
+    dy = y - my
+    g = math.exp(-(a*dx*dx + b*dx*dy + c*dy*dy))
+    return g
+
+
+def render(means, variances, directions, colours, alphas, image_shape):
+
+    num_blobs = means.shape[0]
+
+    # create the meshgrid of image coords
+    nx, ny = (image_shape[0], image_shape[1])
+    x = np.linspace(0, 1, nx)
+    y = np.linspace(0, 1, ny)
+    xv, yv = np.meshgrid(x, y)
+
+    combined_image = torch.zeros(3, nx, ny)
+    sum_alphas = 0
+
+    # render each blob as a separate image
+    for k in range(0, num_blobs):
+        constituent_image = torch.zeros(3, nx, ny)
+        mx = means[k,0]
+        my = means[k,1]
+        sx = variances[k,0]
+        sy = variances[k,1]
+        rho = directions[k]
+        colour = colours[k,:]
+        alpha = alphas[k]
+
+        covariance = reconstruct_covariance(sx, sy, rho)
+        for i in range(0, nx):
+            for j in range(0, ny):
+                G = gaussian_2d(covariance, mx, my, x[j], y[i])
+                constituent_image[0, i, j] = colour[0] * G
+                constituent_image[1, i, j] = colour[1] * G
+                constituent_image[2, i, j] = colour[2] * G
+        sum_alphas = sum_alphas + alpha
+        combined_image = combined_image + constituent_image * alpha
+
+    return combined_image / sum_alphas
 
 
 def train(input_image, target_image, num_samples, num_epochs, learning_rate, render_interval, output_folder):
@@ -85,11 +151,26 @@ def train(input_image, target_image, num_samples, num_epochs, learning_rate, ren
     # We now have all the params for optimizing
     Y = nn.Parameter(torch.cat([coords, variances, directions, colours, alphas], dim = 1))
     optimizer = Adam([Y], lr = learning_rate) 
-
-    # TODO NEXT : Implement the rendering before continuing with this 
     for i in range(1,num_epochs+1):
-        #output_image = render(Y, target_image.shape)
-        output_image_tensor = torch.tensor(target_image, requires_grad=True)
+    
+        means = torch.tanh(Y[:, 0:2])
+        variances = torch.sigmoid(Y[:, 2:4])
+        directions = torch.tanh(Y[:, 4])
+        colours = torch.sigmoid(Y[:, 5:8])
+        alphas = torch.sigmoid(Y[:, 8])
+
+        # --- TEST RENDERING -------------------------------------------------------
+        means =  torch.tensor([(0.3, 0.3), (0.5, 0.5)])
+        variances = torch.tensor([(0.5, 0.2), (0.6, 0.1)])
+        directions = torch.tensor([0, 3.14/4])
+        colours = torch.tensor([(1.0, 0.0, 0.0), (0.0, 0.0, 1.0)])
+        alphas = torch.tensor([1.0, 1.0])
+        # --- END TEST RENDERING ---------------------------------------------------
+        output_image = render(means, variances, directions, colours, alphas, target_image.shape) # Keep this line
+        save_output_image(output_folder, tvt.ToPILImage()(output_image), 666)
+        exit()
+
+        output_image_tensor = torch.tensor(output_image, requires_grad=True)
         target_image_tensor = torch.tensor(target_image, requires_grad=True)
         loss = L1_and_SSIM(output_image_tensor, target_image_tensor, 0.2)
         optimizer.zero_grad()
@@ -97,7 +178,7 @@ def train(input_image, target_image, num_samples, num_epochs, learning_rate, ren
         optimizer.step()
         if i == 1 or i % render_interval == 0:
             print("Epoch {0}, loss {1}".format(i, loss.item()))
-            #save_output_image(output_folder, Image.fromarray(output_image.astype(np.uint8)), i)
+            #save_output_image(output_folder, tvt.ToPILImage()(output_image), i)
 
 
 def main():
@@ -123,9 +204,12 @@ def main():
     target_image_width = config.getint('training', 'target_image_width')
     prepare_output_folder(output_folder)
 
+    # Load the image and prepare for training
     input_image = Image.open(input_file)
     target_image = prepare_target_image(input_image, target_image_height, target_image_width)
     save_target_image(output_folder, target_image)
+    
+    # The main job
     train(input_image, target_image, num_samples, num_epochs, learning_rate, render_interval, output_folder)
 
     print("Done!")
