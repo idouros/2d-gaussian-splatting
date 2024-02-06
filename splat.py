@@ -37,7 +37,7 @@ def sample_input_image(input_image, num_samples):
     for i in range(num_samples):
         colour_samples[i:] = input_image[sample_coords[i,0], sample_coords[i,1]]
 
-    return colour_samples / 255.0 , sample_coords / max_dim
+    return colour_samples / 255.0 , ((sample_coords / max_dim) - 0.5) * 2.0
 
 
 def L1_and_SSIM(image_tensor_1, image_tensor_2, llambda):
@@ -94,21 +94,24 @@ def gaussian_2d(covariance, mx, my, x, y):
     return g
 
 
-def render(means, variances, directions, colours, alphas, image_shape):
+def render(means, variances, directions, colours, alphas, image_shape, gaussian_kernel_size = 10):
 
     num_blobs = means.shape[0]
 
     # create the meshgrid of image coords
     nx, ny = (image_shape[0], image_shape[1])
-    x = np.linspace(0, 1, nx)
-    y = np.linspace(0, 1, ny)
+    x = (np.linspace(0, 1, nx) - 0.5) * 2.0
+    y = (np.linspace(0, 1, ny) - 0.5) * 2.0
 
     combined_image = torch.zeros(3, nx, ny)
     sum_alphas = 0
 
+    f = (0.5 / nx) * gaussian_kernel_size
+
     # render each blob as a separate image
     for k in range(0, num_blobs):
         constituent_image = torch.zeros(3, nx, ny)
+
         mx = means[k,0]
         my = means[k,1]
         sx = variances[k,0]
@@ -117,20 +120,27 @@ def render(means, variances, directions, colours, alphas, image_shape):
         colour = colours[k,:]
         alpha = alphas[k]
 
-        covariance = reconstruct_covariance(sx, sy, rho)
-        for i in range(0, nx):
-            for j in range(0, ny):
+        covariance = reconstruct_covariance(sx * f, sy * f, rho)
+
+        i_start = 0
+        i_end = nx
+        j_start = 0
+        j_end = ny
+
+        for i in range(i_start, i_end):
+            for j in range(j_start, j_end):
                 G = gaussian_2d(covariance, mx, my, x[j], y[i])
-                constituent_image[0, i, j] = colour[0] * G
-                constituent_image[1, i, j] = colour[1] * G
-                constituent_image[2, i, j] = colour[2] * G
+                constituent_image[0, j, i] = colour[0] * G
+                constituent_image[1, j, i] = colour[1] * G
+                constituent_image[2, j, i] = colour[2] * G
         sum_alphas = sum_alphas + alpha
         combined_image = combined_image + constituent_image * alpha
 
-    return combined_image / sum_alphas
+    return torch.clamp(combined_image, 0, 1)
 
 
-def train(input_image, target_image, num_samples, num_epochs, learning_rate, render_interval, output_folder):
+
+def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epochs, learning_rate, render_interval, output_folder):
     
     # take samples from the image (the gaussian means)
     colour_samples, sample_coords = sample_input_image(input_image, num_samples)
@@ -151,17 +161,18 @@ def train(input_image, target_image, num_samples, num_epochs, learning_rate, ren
     Y = nn.Parameter(torch.cat([coords, variances, directions, colours, alphas], dim = 1))
     optimizer = Adam([Y], lr = learning_rate) 
     for i in range(1,num_epochs+1):
-        torch.empty
-
-        means = Y[:, 0:2]
-        variances = Y[:, 2:4]
+ 
+        means = torch.tanh(Y[:, 0:2])
+        variances = torch.sigmoid(Y[:, 2:4])
         directions = Y[:, 4]
         colours = Y[:, 5:8]
         alphas = Y[:, 8]
 
-        output_image = render(means, variances, directions, colours, alphas, target_image.shape) # Keep this line
-
+        output_image = render(means, variances, directions, colours, alphas, target_image.shape, gaussian_kernel_size) 
+        save_output_image(output_folder, tvt.ToPILImage()(output_image), i)
         output_image_tensor = torch.tensor(output_image, requires_grad=True).to(torch.float64)
+
+
         target_image_tensor = torch.tensor(target_image, requires_grad=True).permute(2, 1, 0)
         loss = L1_and_SSIM(output_image_tensor, target_image_tensor, 0.2)
         if i == 1 or i % render_interval == 0:
@@ -194,6 +205,7 @@ def main():
     render_interval = config.getint('training', 'render_interval')
     target_image_height = config.getint('training', 'target_image_height') 
     target_image_width = config.getint('training', 'target_image_width')
+    gaussian_kernel_size = config.getint('rendering', 'gaussian_kernel_size', fallback=10)
     prepare_output_folder(output_folder)
 
     # Load the image and prepare for training
@@ -202,7 +214,7 @@ def main():
     save_target_image(output_folder, target_image)
     
     # The main job
-    train(input_image, target_image, num_samples, num_epochs, learning_rate, render_interval, output_folder)
+    train(input_image, target_image, gaussian_kernel_size, num_samples, num_epochs, learning_rate, render_interval, output_folder)
 
     print("Done!")
 
