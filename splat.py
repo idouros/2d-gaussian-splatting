@@ -5,6 +5,7 @@ from PIL import Image
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.optim import Adam
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 import torchvision.transforms as tvt
@@ -63,26 +64,6 @@ def save_target_image(output_folder, target_image_array):
     target_image = Image.fromarray((target_image_array * 255).astype(np.uint8))
     target_image.save(output_file_name)
 
-def reconstruct_covariance(sx, sy, rho):
-    # https://en.wikipedia.org/wiki/Gaussian_function#Meaning_of_parameters_for_the_general_equation
-    
-    sx2 = sx * sx
-    sy2 = sy * sy
-    
-    cosrho = math.cos(rho)
-    sinrho = math.sin(rho)
-    sin2rho = math.sin(2 * rho)
-    cosrho_sq = cosrho * cosrho
-    sinrho_sq = sinrho * sinrho
-
-    a = cosrho_sq/(2*sx2) + sinrho_sq/(2*sy2)
-    b = sin2rho/(4*sx2)   + sin2rho/(4*sy2)
-    c = sinrho_sq/(2*sx2) + cosrho_sq/(2*sy2)
-
-    #covariance = np.array([a,b],[b,c])
-    covariance = (a, b, c)
-    return covariance
-
 def gaussian_2d(covariance, mx, my, x, y):
     # https://en.wikipedia.org/wiki/Gaussian_function#Two-dimensional_Gaussian_function
     a = covariance[0]
@@ -96,52 +77,66 @@ def gaussian_2d(covariance, mx, my, x, y):
 
 def render(means, variances, directions, colours, alphas, image_shape, gaussian_kernel_size = 10):
 
+    nx0, ny0 = (image_shape[0], image_shape[1])
+    f = pow((0.5 / nx0) * gaussian_kernel_size, 2)
+
+    # reconstruct the covariance matrices
+    # See here: https://en.wikipedia.org/wiki/Gaussian_function#Meaning_of_parameters_for_the_general_equation
+    sx2 = variances[:,0] * variances[:,0] * f
+    sy2 = variances[:,1] * variances[:,1] * f
+    cosrho = torch.cos(directions)
+    sinrho = torch.sin(directions)
+    sin2rho = torch.sin(directions * 2)
+    cosrho_sq = cosrho * cosrho
+    sinrho_sq = sinrho * sinrho
+    a = cosrho_sq/(2*sx2) + sinrho_sq/(2*sy2)
+    b = sin2rho/(4*sx2)   + sin2rho/(4*sy2)
+    c = sinrho_sq/(2*sx2) + cosrho_sq/(2*sy2)
+    covariances1 = torch.stack([a,b], dim=1)
+    covariances2 = torch.stack([b,c], dim=1)
+    covariances = torch.stack([covariances1, covariances2], dim=1)
+
     num_blobs = means.shape[0]
 
+    # TODO-NEXT Pad the dimensions of the output image canvas to fit the gaussian kernels 
+    # (we will clip them later)
+
+
     # create the meshgrid of image coords
-    nx, ny = (image_shape[0], image_shape[1])
-    x = (np.linspace(0, 1, nx) - 0.5) * 2.0
-    y = (np.linspace(0, 1, ny) - 0.5) * 2.0
 
-    combined_image = torch.zeros(3, nx, ny)
-    sum_alphas = 0
+    x = (np.linspace(0, 1, nx0) - 0.5) * 2.0
+    y = (np.linspace(0, 1, ny0) - 0.5) * 2.0
 
-    f = (0.5 / nx) * gaussian_kernel_size
+    combined_image = torch.zeros(3, nx0, ny0, requires_grad=True)
 
     # render each blob as a separate image
     for k in range(0, num_blobs):
-        constituent_image = torch.zeros(3, nx, ny)
+        constituent_image = torch.zeros(3, nx0, ny0)
 
         mx = means[k,0]
         my = means[k,1]
-        sx = variances[k,0]
-        sy = variances[k,1]
-        rho = directions[k]
         colour = colours[k,:]
         alpha = alphas[k]
 
-        covariance = reconstruct_covariance(sx * f, sy * f, rho)
-
         i_start = 0
-        i_end = nx
+        i_end = nx0
         j_start = 0
-        j_end = ny
+        j_end = ny0
 
         for i in range(i_start, i_end):
             for j in range(j_start, j_end):
-                G = gaussian_2d(covariance, mx, my, x[j], y[i])
+                G = gaussian_2d([covariances[k,0,0], covariances[k,0,1], covariances[k,1,1]], mx, my, x[j], y[i])
                 constituent_image[0, j, i] = colour[0] * G
                 constituent_image[1, j, i] = colour[1] * G
                 constituent_image[2, j, i] = colour[2] * G
-        sum_alphas = sum_alphas + alpha
         combined_image = combined_image + constituent_image * alpha
-
     return torch.clamp(combined_image, 0, 1)
-
 
 
 def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epochs, learning_rate, render_interval, output_folder):
     
+    torch.cuda.device(torch.cuda if torch.cuda.is_available() else 0)
+
     # take samples from the image (the gaussian means)
     colour_samples, sample_coords = sample_input_image(input_image, num_samples)
     colours = torch.tensor(colour_samples).float()
@@ -170,6 +165,7 @@ def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epoc
 
         output_image = render(means, variances, directions, colours, alphas, target_image.shape, gaussian_kernel_size) 
         save_output_image(output_folder, tvt.ToPILImage()(output_image), i)
+        exit()
         output_image_tensor = torch.tensor(output_image, requires_grad=True).to(torch.float64)
 
 
