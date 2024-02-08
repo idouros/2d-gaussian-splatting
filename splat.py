@@ -152,10 +152,7 @@ def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epoc
         output_image_tensor = output_image.to(torch.float64)
         target_image_tensor = torch.tensor(target_image, requires_grad=True).permute(2, 0, 1)
 
-        #loss = L1_and_SSIM(output_image_tensor, target_image_tensor, 0.2)
-        l1 = nn.L1Loss()
-        loss = l1(output_image_tensor, target_image_tensor)
-
+        loss = L1_and_SSIM(output_image_tensor, target_image_tensor, 0.2)
         if i == 1 or i % render_interval == 0:
             print("Epoch {0}, loss {1}".format(i, loss.item()))
             save_output_image(output_folder, tvt.ToPILImage()(output_image), i)
