@@ -84,14 +84,10 @@ def render(means, variances, directions, colours, alphas, image_shape, gaussian_
     c = sinrho_sq/(2*sx2) + cosrho_sq/(2*sy2)
 
     num_blobs = means.shape[0]
-
-    x_limit = nx
-    y_limit = ny
     x_step = 2.0 / nx
     y_step = 2.0 / ny
     x = torch.arange(-1.0, 1.0, step = x_step)
     y = torch.arange(-1.0, 1.0, step = y_step)
-
     combined_image = torch.zeros(3, nx, ny, requires_grad=True)
 
     # render each blob as a separate image, then add
@@ -102,8 +98,9 @@ def render(means, variances, directions, colours, alphas, image_shape, gaussian_
         colour = colours[k,:]
         alpha = alphas[k]
         i, j = torch.meshgrid(x, y, indexing='ij')
-        z = torch.exp(-(a[k]*(i-mx)*(i-mx) + b[k]*(i-mx)*(j-my) + c[k]*(j-my)*(j-my)))
-        constituent_image = torch.stack([z*colour[0],z*colour[1],z*colour[2]])
+        # https://en.wikipedia.org/wiki/Gaussian_function#Two-dimensional_Gaussian_function
+        G = torch.exp(-(a[k]*(i-mx)*(i-mx) + b[k]*(i-mx)*(j-my) + c[k]*(j-my)*(j-my)))
+        constituent_image = torch.stack([G*colour[0],G*colour[1],G*colour[2]])
         combined_image = combined_image + constituent_image * alpha
 
     # clamp values and return
@@ -136,7 +133,7 @@ def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epoc
  
         means = torch.tanh(Y[:, 0:2])
         variances = torch.sigmoid(Y[:, 2:4])
-        directions = Y[:, 4]
+        directions = Y[:, 4] * math.pi
         colours = Y[:, 5:8]
         alphas = Y[:, 8]
 
