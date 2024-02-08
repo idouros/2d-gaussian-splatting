@@ -64,30 +64,14 @@ def save_target_image(output_folder, target_image_array):
     target_image = Image.fromarray((target_image_array * 255).astype(np.uint8))
     target_image.save(output_file_name)
 
-def gaussian_2d(covariance, mx, my, x, y):
-    # https://en.wikipedia.org/wiki/Gaussian_function#Two-dimensional_Gaussian_function
-    a = covariance[0]
-    b = covariance[1]
-    c = covariance[2]
-    dx = x - mx
-    dy = y - my
-    g = math.exp(-(a*dx*dx + b*dx*dy + c*dy*dy))
-    return g
-
 
 def render(means, variances, directions, colours, alphas, image_shape, gaussian_kernel_size = 10):
 
-    nx0, ny0 = (image_shape[0], image_shape[1])
-
-    # Pad the dimensions of the output image canvas to fit the gaussian kernels 
-    # (we will clip them later)
-    nx = nx0 + gaussian_kernel_size
-    ny = ny0 + gaussian_kernel_size
-    padding = gaussian_kernel_size // 2
+    nx, ny = (image_shape[0], image_shape[1])
 
     # reconstruct the covariance matrices
     # See here: https://en.wikipedia.org/wiki/Gaussian_function#Meaning_of_parameters_for_the_general_equation
-    f = pow((0.5 / nx0) * gaussian_kernel_size, 2)
+    f = pow((0.5 / nx) * gaussian_kernel_size, 2)
     sx2 = variances[:,0] * variances[:,0] * f
     sy2 = variances[:,1] * variances[:,1] * f
     cosrho = torch.cos(directions)
@@ -98,49 +82,32 @@ def render(means, variances, directions, colours, alphas, image_shape, gaussian_
     a = cosrho_sq/(2*sx2) + sinrho_sq/(2*sy2)
     b = sin2rho/(4*sx2)   + sin2rho/(4*sy2)
     c = sinrho_sq/(2*sx2) + cosrho_sq/(2*sy2)
-    covariances1 = torch.stack([a,b], dim=1)
-    covariances2 = torch.stack([b,c], dim=1)
-    covariances = torch.stack([covariances1, covariances2], dim=1)
 
     num_blobs = means.shape[0]
 
-
-    x_limit = nx / nx0
-    y_limit = ny / ny0
-    x_step = 2.0 / nx0
-    y_step = 2.0 / ny0
-    x = np.arange(-x_limit, x_limit+x_step, step = x_step)
-    y = np.arange(-y_limit, y_limit+y_step, step = y_step)
+    x_limit = nx
+    y_limit = ny
+    x_step = 2.0 / nx
+    y_step = 2.0 / ny
+    x = torch.arange(-1.0, 1.0, step = x_step)
+    y = torch.arange(-1.0, 1.0, step = y_step)
 
     combined_image = torch.zeros(3, nx, ny, requires_grad=True)
 
-    # render each blob as a separate image
+    # render each blob as a separate image, then add
     for k in range(0, num_blobs):
         constituent_image = torch.zeros(3, nx, ny)
-
         mx = means[k,0]
         my = means[k,1]
         colour = colours[k,:]
         alpha = alphas[k]
-
-        i_start = 0
-        i_end = nx
-        j_start = 0
-        j_end = ny
-
-        for i in range(i_start, i_end):
-            for j in range(j_start, j_end):
-                G = gaussian_2d([covariances[k,0,0], covariances[k,0,1], covariances[k,1,1]], mx, my, x[j], y[i])
-                constituent_image[0, j, i] = colour[0] * G
-                constituent_image[1, j, i] = colour[1] * G
-                constituent_image[2, j, i] = colour[2] * G
+        i, j = torch.meshgrid(x, y, indexing='ij')
+        z = torch.exp(-(a[k]*(i-mx)*(i-mx) + b[k]*(i-mx)*(j-my) + c[k]*(j-my)*(j-my)))
+        constituent_image = torch.stack([z*colour[0],z*colour[1],z*colour[2]])
         combined_image = combined_image + constituent_image * alpha
 
-    # remove the padding
-    final_image = combined_image[:,padding:padding+nx0,padding:padding+ny0]
-
     # clamp values and return
-    return torch.clamp(final_image, 0, 1)
+    return torch.clamp(combined_image, 0, 1)
 
 
 def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epochs, learning_rate, render_interval, output_folder):
@@ -176,18 +143,16 @@ def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epoc
         test_rendering = False
         if (test_rendering):
             # --- TEST RENDERING -------------------------------------------------------
-            means =  torch.tensor([(0.3, 0.3), (0.5, 0.5)])
+            means =  torch.tensor([(0.0, 0.0), (0.5, 0.5)])
             variances = torch.tensor([(0.5, 0.2), (0.6, 0.1)])
-            directions = torch.tensor([0, 3.14/4])
-            colours = torch.tensor([(1.0, 0.0, 0.0), (0.0, 0.0, 1.0)])
+            directions = torch.tensor([3.14/5, 3.14/4])
+            colours = torch.tensor([(0.0, 0.1, 0.0), (0.0, 0.0, 1.0)])
             alphas = torch.tensor([1.0, 1.0])
             # --- END TEST RENDERING ---------------------------------------------------
 
         output_image = render(means, variances, directions, colours, alphas, target_image.shape, gaussian_kernel_size) 
         save_output_image(output_folder, tvt.ToPILImage()(output_image), i)
-        exit()
         output_image_tensor = torch.tensor(output_image, requires_grad=True).to(torch.float64)
-
 
         target_image_tensor = torch.tensor(target_image, requires_grad=True).permute(2, 1, 0)
         loss = L1_and_SSIM(output_image_tensor, target_image_tensor, 0.2)
