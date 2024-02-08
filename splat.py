@@ -149,9 +149,8 @@ def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epoc
             # --- END TEST RENDERING ---------------------------------------------------
 
         output_image = render(means, variances, directions, colours, alphas, target_image.shape, gaussian_kernel_size) 
-        save_output_image(output_folder, tvt.ToPILImage()(output_image), i)
         output_image_tensor = output_image.to(torch.float64)
-        target_image_tensor = torch.tensor(target_image, requires_grad=True).permute(2, 1, 0)
+        target_image_tensor = torch.tensor(target_image, requires_grad=True).permute(2, 0, 1)
 
         #loss = L1_and_SSIM(output_image_tensor, target_image_tensor, 0.2)
         l1 = nn.L1Loss()
