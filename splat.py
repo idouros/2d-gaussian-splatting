@@ -5,7 +5,6 @@ from PIL import Image
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.optim import Adam
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 import torchvision.transforms as tvt
@@ -92,7 +91,7 @@ def render(means, variances, directions, colours, alphas, image_shape, gaussian_
 
     # render each blob as a separate image, then add
     for k in range(0, num_blobs):
-        constituent_image = torch.zeros(3, nx, ny)
+        constituent_image = torch.zeros(3, nx, ny, requires_grad=True)
         mx = means[k,0]
         my = means[k,1]
         colour = colours[k,:]
@@ -113,21 +112,23 @@ def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epoc
 
     # take samples from the image (the gaussian means)
     colour_samples, sample_coords = sample_input_image(input_image, num_samples)
-    colours = torch.tensor(colour_samples).float()
-    coords = torch.atanh(torch.tensor(sample_coords).float())
+    colours = torch.tensor(colour_samples).float().requires_grad_()
+    coords = torch.atanh(torch.tensor(sample_coords).float(), ).requires_grad_()
 
     # variance and direction
     # Using this representation for training instead of a covariance matrix because:
     # a. it is more immediately intuitive, and
     # b. coveriance matrix would need to be positive semidefinite, which is not that easy to constrain
-    variances = torch.rand(num_samples, 2)
-    directions = 2.0 * torch.rand(num_samples, 1) - 1 # In 3D it's a quaternion or a rotation matrix, in 2D an angle is enough
+    variances = torch.rand(num_samples, 2).requires_grad_()
+    directions = (2.0 * torch.rand(num_samples, 1) - 1.0).requires_grad_() # In 3D it's a quaternion or a rotation matrix, in 2D an angle is enough
 
     # finally, the alpha values for the blending
     alphas = torch.ones(num_samples, 1)
 
     # We now have all the params for optimizing
-    Y = nn.Parameter(torch.cat([coords, variances, directions, colours, alphas], dim = 1))
+    params = torch.cat([coords, variances, directions, colours, alphas], dim = 1)
+    params.requires_grad_()
+    Y = nn.Parameter(params, requires_grad=True)
     optimizer = Adam([Y], lr = learning_rate) 
     for i in range(1,num_epochs+1):
  
@@ -149,10 +150,13 @@ def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epoc
 
         output_image = render(means, variances, directions, colours, alphas, target_image.shape, gaussian_kernel_size) 
         save_output_image(output_folder, tvt.ToPILImage()(output_image), i)
-        output_image_tensor = torch.tensor(output_image, requires_grad=True).to(torch.float64)
-
+        output_image_tensor = output_image.to(torch.float64)
         target_image_tensor = torch.tensor(target_image, requires_grad=True).permute(2, 1, 0)
-        loss = L1_and_SSIM(output_image_tensor, target_image_tensor, 0.2)
+
+        #loss = L1_and_SSIM(output_image_tensor, target_image_tensor, 0.2)
+        l1 = nn.L1Loss()
+        loss = l1(output_image_tensor, target_image_tensor)
+
         if i == 1 or i % render_interval == 0:
             print("Epoch {0}, loss {1}".format(i, loss.item()))
             save_output_image(output_folder, tvt.ToPILImage()(output_image), i)
