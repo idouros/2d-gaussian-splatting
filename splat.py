@@ -78,10 +78,16 @@ def gaussian_2d(covariance, mx, my, x, y):
 def render(means, variances, directions, colours, alphas, image_shape, gaussian_kernel_size = 10):
 
     nx0, ny0 = (image_shape[0], image_shape[1])
-    f = pow((0.5 / nx0) * gaussian_kernel_size, 2)
+
+    # Pad the dimensions of the output image canvas to fit the gaussian kernels 
+    # (we will clip them later)
+    nx = nx0 + gaussian_kernel_size
+    ny = ny0 + gaussian_kernel_size
+    padding = gaussian_kernel_size // 2
 
     # reconstruct the covariance matrices
     # See here: https://en.wikipedia.org/wiki/Gaussian_function#Meaning_of_parameters_for_the_general_equation
+    f = pow((0.5 / nx0) * gaussian_kernel_size, 2)
     sx2 = variances[:,0] * variances[:,0] * f
     sy2 = variances[:,1] * variances[:,1] * f
     cosrho = torch.cos(directions)
@@ -98,20 +104,19 @@ def render(means, variances, directions, colours, alphas, image_shape, gaussian_
 
     num_blobs = means.shape[0]
 
-    # TODO-NEXT Pad the dimensions of the output image canvas to fit the gaussian kernels 
-    # (we will clip them later)
 
+    x_limit = nx / nx0
+    y_limit = ny / ny0
+    x_step = 2.0 / nx0
+    y_step = 2.0 / ny0
+    x = np.arange(-x_limit, x_limit+x_step, step = x_step)
+    y = np.arange(-y_limit, y_limit+y_step, step = y_step)
 
-    # create the meshgrid of image coords
-
-    x = (np.linspace(0, 1, nx0) - 0.5) * 2.0
-    y = (np.linspace(0, 1, ny0) - 0.5) * 2.0
-
-    combined_image = torch.zeros(3, nx0, ny0, requires_grad=True)
+    combined_image = torch.zeros(3, nx, ny, requires_grad=True)
 
     # render each blob as a separate image
     for k in range(0, num_blobs):
-        constituent_image = torch.zeros(3, nx0, ny0)
+        constituent_image = torch.zeros(3, nx, ny)
 
         mx = means[k,0]
         my = means[k,1]
@@ -119,9 +124,9 @@ def render(means, variances, directions, colours, alphas, image_shape, gaussian_
         alpha = alphas[k]
 
         i_start = 0
-        i_end = nx0
+        i_end = nx
         j_start = 0
-        j_end = ny0
+        j_end = ny
 
         for i in range(i_start, i_end):
             for j in range(j_start, j_end):
@@ -130,11 +135,16 @@ def render(means, variances, directions, colours, alphas, image_shape, gaussian_
                 constituent_image[1, j, i] = colour[1] * G
                 constituent_image[2, j, i] = colour[2] * G
         combined_image = combined_image + constituent_image * alpha
-    return torch.clamp(combined_image, 0, 1)
+
+    # remove the padding
+    final_image = combined_image[:,padding:padding+nx0,padding:padding+ny0]
+
+    # clamp values and return
+    return torch.clamp(final_image, 0, 1)
 
 
 def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epochs, learning_rate, render_interval, output_folder):
-    
+
     torch.cuda.device(torch.cuda if torch.cuda.is_available() else 0)
 
     # take samples from the image (the gaussian means)
@@ -162,6 +172,16 @@ def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epoc
         directions = Y[:, 4]
         colours = Y[:, 5:8]
         alphas = Y[:, 8]
+
+        test_rendering = False
+        if (test_rendering):
+            # --- TEST RENDERING -------------------------------------------------------
+            means =  torch.tensor([(0.3, 0.3), (0.5, 0.5)])
+            variances = torch.tensor([(0.5, 0.2), (0.6, 0.1)])
+            directions = torch.tensor([0, 3.14/4])
+            colours = torch.tensor([(1.0, 0.0, 0.0), (0.0, 0.0, 1.0)])
+            alphas = torch.tensor([1.0, 1.0])
+            # --- END TEST RENDERING ---------------------------------------------------
 
         output_image = render(means, variances, directions, colours, alphas, target_image.shape, gaussian_kernel_size) 
         save_output_image(output_folder, tvt.ToPILImage()(output_image), i)
@@ -201,7 +221,7 @@ def main():
     render_interval = config.getint('training', 'render_interval')
     target_image_height = config.getint('training', 'target_image_height') 
     target_image_width = config.getint('training', 'target_image_width')
-    gaussian_kernel_size = config.getint('rendering', 'gaussian_kernel_size', fallback=10)
+    gaussian_kernel_size = config.getint('rendering', 'gaussian_kernel_radius', fallback=5) * 2
     prepare_output_folder(output_folder)
 
     # Load the image and prepare for training
