@@ -106,7 +106,7 @@ def render(means, variances, directions, colours, alphas, image_shape, gaussian_
     return torch.clamp(combined_image, 0, 1)
 
 
-def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epochs, learning_rate, render_interval, output_folder):
+def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epochs, learning_rate, density_control_params, render_interval, output_folder):
 
     torch.cuda.device(torch.cuda if torch.cuda.is_available() else 0)
 
@@ -130,23 +130,13 @@ def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epoc
     params.requires_grad_()
     Y = nn.Parameter(params, requires_grad=True)
     optimizer = Adam([Y], lr = learning_rate) 
+    num_added_samples = 0
     for i in range(1,num_epochs+1):
- 
         means = torch.tanh(Y[:, 0:2])
         variances = torch.sigmoid(Y[:, 2:4])
         directions = Y[:, 4] * math.pi
         colours = torch.sigmoid(Y[:, 5:8])
         alphas = torch.sigmoid(Y[:, 8])
-
-        test_rendering = False
-        if (test_rendering):
-            # --- TEST RENDERING -------------------------------------------------------
-            means =  torch.tensor([(0.0, 0.0), (0.5, 0.5)])
-            variances = torch.tensor([(0.5, 0.2), (0.6, 0.1)])
-            directions = torch.tensor([3.14/5, 3.14/4])
-            colours = torch.tensor([(0.0, 0.1, 0.0), (0.0, 0.0, 1.0)])
-            alphas = torch.tensor([1.0, 1.0])
-            # --- END TEST RENDERING ---------------------------------------------------
 
         output_image = render(means, variances, directions, colours, alphas, target_image.shape, gaussian_kernel_size) 
         output_image_tensor = output_image.to(torch.float64)
@@ -159,6 +149,29 @@ def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epoc
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
+        # Adaptive densification 
+        if density_control_params['densify'] == True:
+            if i % density_control_params['interval'] == 0:
+                print("Densifying...")
+                num_extra_samples = density_control_params['extra_samples']
+                if num_added_samples < num_extra_samples:
+                    
+                    # Almost-transparent gaussians (remove)
+                    num_kernels_before = params.shape[0]
+                    transparency_threshold = density_control_params['transparency_threshold']
+                    mask = torch.sigmoid(Y[:, 8]) > transparency_threshold
+                    params = params[mask]
+                    num_kernels_after = params.shape[0]
+                    print("\t{0} near-transparent kernels removed".format(num_kernels_before-num_kernels_after))
+                    Y = nn.Parameter(params, requires_grad=True)
+                    optimizer = Adam([Y], lr = learning_rate) 
+
+                    # Large coordinate gradient - small Gaussian (indicates an under-reconstructed region):
+                    # Create a clone of the gaussian, and move it in the direction of the gradient
+
+                    # Large coordinate gradient - large Gaussian (indicates an over-reconstructed region):
+                    # Split the gaussian: Create a copy, scale both down, move apart in the direction of max variance
 
 
 
@@ -184,6 +197,11 @@ def main():
     target_image_height = config.getint('training', 'target_image_height') 
     target_image_width = config.getint('training', 'target_image_width')
     gaussian_kernel_size = config.getint('rendering', 'gaussian_kernel_radius', fallback=5) * 2
+    density_control_params = {}
+    density_control_params["densify"] = config.getboolean('density_control', 'densify', fallback=False)
+    density_control_params["interval"] = config.getint('density_control', 'interval', fallback=0)
+    density_control_params["extra_samples"] = config.getint('density_control', 'extra_samples', fallback=0)
+    density_control_params["transparency_threshold"] = config.getfloat('density_control', 'transparency_threshold', fallback=0.005)
     prepare_output_folder(output_folder)
 
     # Load the image and prepare for training
@@ -192,7 +210,7 @@ def main():
     save_target_image(output_folder, target_image)
     
     # The main job
-    train(input_image, target_image, gaussian_kernel_size, num_samples, num_epochs, learning_rate, render_interval, output_folder)
+    train(input_image, target_image, gaussian_kernel_size, num_samples, num_epochs, learning_rate, density_control_params, render_interval, output_folder)
 
     print("Done!")
 
