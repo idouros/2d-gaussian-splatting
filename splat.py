@@ -156,22 +156,58 @@ def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epoc
                 print("Densifying...")
                 num_extra_samples = density_control_params['extra_samples']
                 if num_added_samples < num_extra_samples:
-                    
+
                     # Almost-transparent gaussians (remove)
                     num_kernels_before = params.shape[0]
                     transparency_threshold = density_control_params['transparency_threshold']
                     mask = torch.sigmoid(Y[:, 8]) > transparency_threshold
                     params = params[mask]
+                    grads = Y.grad[mask][:,0:2] # will need this a little bit later
                     num_kernels_after = params.shape[0]
                     print("\t{0} near-transparent kernels removed".format(num_kernels_before-num_kernels_after))
-                    Y = nn.Parameter(params, requires_grad=True)
-                    optimizer = Adam([Y], lr = learning_rate) 
+
+                    # Identify the kernels with large position gradients
+                    grad_norms = torch.norm(grads, dim=1, p=2)
+                    large_grad_mask = grad_norms > density_control_params['kernel_position_gradient_threshold']
+                    
+                    # Construct the variance norms
+                    variances = torch.sigmoid(Y[:, 2:4])
+                    var_norms = torch.norm(variances, dim=1, p=2)
 
                     # Large coordinate gradient - small Gaussian (indicates an under-reconstructed region):
                     # Create a clone of the gaussian, and move it in the direction of the gradient
+                    mask_under_reconstructed = torch.logical_and(large_grad_mask, var_norms < density_control_params['kernel_size_threshold'])
+                    kernels_cloned = 0
+                    for k in range (0, mask_under_reconstructed.shape[0]):
+                        if mask_under_reconstructed[k] == True:
+                            cloned_kernel = torch.clone(params[k,:])
+                            centre = cloned_kernel[0:2]
+                            gradient = grads[k]
+                            new_centre = centre + gradient
+                            cloned_kernel[0:2] = new_centre
+                            params = torch.cat([params, torch.reshape(cloned_kernel, (1,9))], dim=0)
+                            kernels_cloned +=1
+                    print("\t{0} kernels cloned to densify under-reconstructed regions".format(kernels_cloned))
 
                     # Large coordinate gradient - large Gaussian (indicates an over-reconstructed region):
-                    # Split the gaussian: Create a copy, scale both down, move apart in the direction of max variance
+                    # Split the gaussian: Create a copy, scale both down
+                    kernels_split = 0
+                    mask_over_reconstructed = torch.logical_and(large_grad_mask, var_norms >= density_control_params['kernel_size_threshold'])
+                    for k in range (0, mask_over_reconstructed.shape[0]):
+                        if mask_over_reconstructed[k] == True:
+                            kernel_1 = torch.clone(params[k,:])
+                            kernel_2 = torch.clone(params[k,:])
+                            new_variance = variances[k,:] / density_control_params['kernel_scaledown_factor']
+                            kernel_1[2:4] = new_variance
+                            params[k,:] = kernel_1
+                            kernel_2[2:4] = new_variance
+                            params = torch.cat([params, torch.reshape(kernel_2, (1,9))], dim=0)
+                            kernels_split +=1
+                    print("\t{0} kernels split and scaled down to densify over-reconstructed regions".format(kernels_split))
+
+                    # Reset the optimizer
+                    Y = nn.Parameter(params, requires_grad=True)
+                    optimizer = Adam([Y], lr = learning_rate) 
 
 
 
@@ -202,6 +238,9 @@ def main():
     density_control_params["interval"] = config.getint('density_control', 'interval', fallback=0)
     density_control_params["extra_samples"] = config.getint('density_control', 'extra_samples', fallback=0)
     density_control_params["transparency_threshold"] = config.getfloat('density_control', 'transparency_threshold', fallback=0.005)
+    density_control_params["kernel_size_threshold"] = config.getfloat('density_control', 'kernel_size_threshold', fallback = 0.0015)
+    density_control_params["kernel_position_gradient_threshold"] = config.getfloat('density_control', 'kernel_position_gradient_threshold', fallback = 0.0015)
+    density_control_params["kernel_scaledown_factor"] = config.getfloat('density_control', 'kernel_scaledown_factor', fallback = 1.6)
     prepare_output_folder(output_folder)
 
     # Load the image and prepare for training
