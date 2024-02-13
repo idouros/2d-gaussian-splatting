@@ -81,10 +81,6 @@ def render(means, variances, directions, colours, alphas, image_shape, gaussian_
     a = cosrho_sq/(2*sx2) + sinrho_sq/(2*sy2)
     b = sin2rho/(4*sx2)   + sin2rho/(4*sy2)
     c = sinrho_sq/(2*sx2) + cosrho_sq/(2*sy2)
-    #theta = 0.5 * torch.atan(2*b/(a-c))
-    #print(theta)
-    #print(directions)
-    #exit()
 
     num_blobs = means.shape[0]
     x_step = 2.0 / nx
@@ -139,8 +135,8 @@ def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epoc
         means = torch.tanh(Y[:, 0:2])
         variances = torch.sigmoid(Y[:, 2:4])
         directions = Y[:, 4] * math.pi
-        colours = Y[:, 5:8]
-        alphas = Y[:, 8]
+        colours = torch.sigmoid(Y[:, 5:8])
+        alphas = torch.sigmoid(Y[:, 8])
 
         test_rendering = False
         if (test_rendering):
