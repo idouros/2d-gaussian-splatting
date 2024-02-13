@@ -70,7 +70,7 @@ def render(means, variances, directions, colours, alphas, image_shape, gaussian_
 
     # reconstruct the covariance matrices
     # See here: https://en.wikipedia.org/wiki/Gaussian_function#Meaning_of_parameters_for_the_general_equation
-    f = pow((0.5 / nx) * gaussian_kernel_size, 2)
+    f = (0.5 / nx) * gaussian_kernel_size
     sx2 = variances[:,0] * variances[:,0] * f
     sy2 = variances[:,1] * variances[:,1] * f
     cosrho = torch.cos(directions)
@@ -81,6 +81,10 @@ def render(means, variances, directions, colours, alphas, image_shape, gaussian_
     a = cosrho_sq/(2*sx2) + sinrho_sq/(2*sy2)
     b = sin2rho/(4*sx2)   + sin2rho/(4*sy2)
     c = sinrho_sq/(2*sx2) + cosrho_sq/(2*sy2)
+    #theta = 0.5 * torch.atan(2*b/(a-c))
+    #print(theta)
+    #print(directions)
+    #exit()
 
     num_blobs = means.shape[0]
     x_step = 2.0 / nx
