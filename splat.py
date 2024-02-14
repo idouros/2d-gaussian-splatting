@@ -1,4 +1,5 @@
 import os
+import sys
 from optparse import OptionParser
 import configparser
 from PIL import Image
@@ -55,6 +56,7 @@ def L1_and_SSIM(image_tensor_1, image_tensor_2, llambda):
 
 def save_output_image(output_folder, output_image, epoch):
     output_file_name = os.path.join(output_folder, "epoch_{0}.png".format(str(epoch).zfill(5)))
+    print("\tSaved " + output_file_name)
     output_image.save(output_file_name)
 
 
@@ -143,8 +145,8 @@ def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epoc
         target_image_tensor = torch.tensor(target_image, requires_grad=True).permute(2, 0, 1)
 
         loss = L1_and_SSIM(output_image_tensor, target_image_tensor, 0.2)
-        if i == 1 or i % render_interval == 0:
-            print("Epoch {0}, loss {1}".format(i, loss.item()))
+        print("Epoch {0}, loss {1}".format(i, loss.item()))
+        if i == 1 or i % render_interval == 0 or i == num_epochs:
             save_output_image(output_folder, tvt.ToPILImage()(output_image), i)
         optimizer.zero_grad()
         loss.backward()
@@ -171,7 +173,7 @@ def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epoc
                     large_grad_mask = grad_norms > density_control_params['kernel_position_gradient_threshold']
                     
                     # Construct the variance norms
-                    variances = torch.sigmoid(Y[:, 2:4])
+                    variances = torch.sigmoid(Y[mask][:, 2:4])
                     var_norms = torch.norm(variances, dim=1, p=2)
 
                     # Large coordinate gradient - small Gaussian (indicates an under-reconstructed region):
@@ -206,9 +208,11 @@ def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epoc
                     print("\t{0} kernels split and scaled down to densify over-reconstructed regions".format(kernels_split))
 
                     # Reset the optimizer
+                    print("\tContinuing with {0} kernels...".format(params.shape[0]))
                     Y = nn.Parameter(params, requires_grad=True)
-                    optimizer = Adam([Y], lr = learning_rate) 
-
+                    optimizer = Adam([Y], lr = learning_rate)
+        sys.stdout.flush()
+    print("Training complete.")
 
 
 def main():

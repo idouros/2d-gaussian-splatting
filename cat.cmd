@@ -1,0 +1,1 @@
+python .\splat.py .\examples\cat.config > .\examples\output\cat\cat.log
