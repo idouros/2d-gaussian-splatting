@@ -1,0 +1,1 @@
+python .\splat.py .\examples\buddy.config > .\examples\output\buddy\buddy.log

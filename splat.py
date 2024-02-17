@@ -207,6 +207,8 @@ def train(input_image, target_image, gaussian_kernel_size, num_samples, num_epoc
                             kernels_split +=1
                     print("\t{0} kernels split and scaled down to densify over-reconstructed regions".format(kernels_split))
 
+                    num_added_samples += (kernels_cloned + kernels_split)
+
                     # Reset the optimizer
                     print("\tContinuing with {0} kernels...".format(params.shape[0]))
                     Y = nn.Parameter(params, requires_grad=True)
